@@ -1,2 +1,3 @@
-# linuxharden
-Some script for hardening Linux
+# Usage
+
+Some scripts for hardening Linux machines
