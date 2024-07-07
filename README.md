@@ -1,3 +1,5 @@
 # Usage
 
-Some scripts for hardening Linux machines
+Some scripts for hardening and managing Linux machines.
+
+![alt text](bluespongetux.png)
