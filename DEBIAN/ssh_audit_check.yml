@@ -1,0 +1,146 @@
+---
+- name: SSH Configuration Security Audit for Debian
+  hosts: all
+  become: yes
+  gather_facts: yes
+
+  vars:
+    sshd_config_path: /etc/ssh/sshd_config
+
+  tasks:
+
+    ###########################################################################
+    # 1️⃣ Verify that SSH server is installed
+    ###########################################################################
+    - name: Check if OpenSSH server is installed
+      ansible.builtin.shell: dpkg -l | grep openssh-server || true
+      register: ssh_pkg
+      changed_when: false
+
+    - name: Report SSH package status
+      ansible.builtin.debug:
+        msg: >
+          {% if ssh_pkg.stdout %}
+            ✅ OpenSSH server is installed.
+          {% else %}
+            ⚠️ OpenSSH server package not found — SSH might not be running or installed.
+          {% endif %}
+
+    ###########################################################################
+    # 2️⃣ Parse SSH configuration for key settings
+    ###########################################################################
+    - name: Read sshd_config file
+      ansible.builtin.slurp:
+        src: "{{ sshd_config_path }}"
+      register: sshd_conf_content
+      ignore_errors: yes
+
+    - name: Decode sshd_config content
+      ansible.builtin.set_fact:
+        sshd_config_text: "{{ sshd_conf_content.content | b64decode }}"
+      when: sshd_conf_content is defined and sshd_conf_content.content is defined
+
+    ###########################################################################
+    # 3️⃣ Check for root login policy
+    ###########################################################################
+    - name: Check PermitRootLogin setting
+      ansible.builtin.debug:
+        msg: >
+          {% if sshd_config_text is not defined %}
+            ⚠️ Cannot read {{ sshd_config_path }} — file missing or permission denied.
+          {% elif 'PermitRootLogin yes' in sshd_config_text %}
+            ⚠️ Root SSH login is ENABLED — should be disabled.
+          {% elif 'PermitRootLogin prohibit-password' in sshd_config_text %}
+            ⚠️ Root SSH login is partially restricted (prohibit-password) — consider full disable.
+          {% else %}
+            ✅ Root SSH login appears to be disabled.
+          {% endif %}
+
+    ###########################################################################
+    # 4️⃣ Check password authentication
+    ###########################################################################
+    - name: Check PasswordAuthentication setting
+      ansible.builtin.debug:
+        msg: >
+          {% if 'PasswordAuthentication yes' in sshd_config_text %}
+            ⚠️ Password authentication is ENABLED — prefer key-based access.
+          {% elif 'PasswordAuthentication no' in sshd_config_text %}
+            ✅ Password authentication is disabled (secure).
+          {% else %}
+            ⚠️ PasswordAuthentication not explicitly set — check default behavior.
+          {% endif %}
+
+    ###########################################################################
+    # 5️⃣ Check SSH protocol version
+    ###########################################################################
+    - name: Check Protocol version
+      ansible.builtin.debug:
+        msg: >
+          {% if 'Protocol 1' in sshd_config_text %}
+            ❌ Protocol 1 detected — insecure, upgrade to Protocol 2.
+          {% elif 'Protocol 2' in sshd_config_text %}
+            ✅ Using SSH Protocol 2.
+          {% else %}
+            ⚠️ Protocol not specified — defaults to 2 (acceptable).
+          {% endif %}
+
+    ###########################################################################
+    # 6️⃣ Check login grace time and auth tries
+    ###########################################################################
+    - name: Check LoginGraceTime and MaxAuthTries
+      ansible.builtin.debug:
+        msg: >
+          {% set grace = sshd_config_text | regex_search('LoginGraceTime\\s+(\\S+)', '\\1') | first | default('Not set') %}
+          {% set maxtries = sshd_config_text | regex_search('MaxAuthTries\\s+(\\S+)', '\\1') | first | default('Not set') %}
+          LoginGraceTime: {{ grace }} / MaxAuthTries: {{ maxtries }}
+          {% if grace != 'Not set' and (grace | int(default=60)) > 60 %}
+            ⚠️ LoginGraceTime too long (>60s).
+          {% endif %}
+          {% if maxtries != 'Not set' and (maxtries | int(default=6)) > 4 %}
+            ⚠️ MaxAuthTries too high (>4).
+          {% endif %}
+
+    ###########################################################################
+    # 7️⃣ Check if SSH logs are verbose
+    ###########################################################################
+    - name: Check SSH LogLevel
+      ansible.builtin.debug:
+        msg: >
+          {% if 'LogLevel VERBOSE' in sshd_config_text %}
+            ✅ LogLevel VERBOSE — audit-friendly.
+          {% elif 'LogLevel INFO' in sshd_config_text %}
+            ⚠️ LogLevel is INFO — acceptable but may miss audit details.
+          {% else %}
+            ⚠️ LogLevel not set — check defaults.
+          {% endif %}
+
+    ###########################################################################
+    # 8️⃣ Check X11 and forwarding policies
+    ###########################################################################
+    - name: Check for X11Forwarding and TCP Forwarding
+      ansible.builtin.debug:
+        msg: >
+          {% if 'X11Forwarding yes' in sshd_config_text %}
+            ⚠️ X11 forwarding ENABLED — disable unless needed.
+          {% else %}
+            ✅ X11 forwarding disabled.
+          {% endif %}
+          {% if 'AllowTcpForwarding yes' in sshd_config_text %}
+            ⚠️ TCP forwarding ENABLED — disable unless tunneling required.
+          {% else %}
+            ✅ TCP forwarding disabled.
+          {% endif %}
+
+    ###########################################################################
+    # 9️⃣ Report SSH port and access info
+    ###########################################################################
+    - name: Check SSH port number
+      ansible.builtin.debug:
+        msg: >
+          {% set port = sshd_config_text | regex_search('Port\\s+(\\d+)', '\\1') | first | default('22') %}
+          SSH is listening on port {{ port }}.
+          {% if port == '22' %}
+            ⚠️ Default port (22) — common target for brute-force attacks.
+          {% else %}
+            ✅ Custom SSH port in use ({{ port }}).
+          {% endif %}

@@ -1,0 +1,107 @@
+---
+- name: Debian Network Security Basic Audit
+  hosts: all
+  become: yes
+  gather_facts: yes
+
+  vars:
+    common_ports:
+      - 22
+      - 80
+      - 443
+      - 25
+      - 3306
+      - 53
+      - 21
+      - 23
+      - 5900
+
+  tasks:
+
+    ###########################################################################
+    # 1️⃣ Check firewall (UFW or iptables)
+    ###########################################################################
+    - name: Check if UFW is active
+      ansible.builtin.shell: ufw status 2>/dev/null || echo "not installed"
+      register: ufw_status
+      changed_when: false
+      failed_when: false
+
+    - name: Display firewall status
+      ansible.builtin.debug:
+        msg: >
+          {% if 'Status: active' in ufw_status.stdout %}
+            ✅ Firewall (UFW) is active
+          {% elif 'inactive' in ufw_status.stdout %}
+            ⚠️ UFW installed but inactive — enable it with: sudo ufw enable
+          {% else %}
+            ⚠️ UFW not installed — consider installing ufw or configuring nftables
+          {% endif %}
+
+    ###########################################################################
+    # 2️⃣ List open network ports and services
+    ###########################################################################
+    - name: Gather listening ports (using ss)
+      ansible.builtin.shell: ss -tuln
+      register: ss_output
+      changed_when: false
+
+    - name: Display listening ports
+      ansible.builtin.debug:
+        msg: "{{ ss_output.stdout_lines }}"
+
+    ###########################################################################
+    # 3️⃣ Identify unexpected or insecure ports
+    ###########################################################################
+    - name: Flag uncommon open ports
+      ansible.builtin.shell: |
+        ss -tuln | awk '{print $5}' | grep -Eo '[0-9]+$' | sort -u
+      register: open_ports
+      changed_when: false
+
+    - name: Analyze open ports
+      ansible.builtin.debug:
+        msg: >
+          {% set suspicious = [] %}
+          {% for p in open_ports.stdout_lines %}
+            {% if p|int not in common_ports %}
+              {% set _ = suspicious.append(p) %}
+            {% endif %}
+          {% endfor %}
+          {% if suspicious %}
+            ⚠️  Unusual open ports detected: {{ suspicious | join(', ') }}
+          {% else %}
+            ✅  Only expected ports are open
+          {% endif %}
+
+    ###########################################################################
+    # 4️⃣ Check SSH configuration
+    ###########################################################################
+    - name: Check SSH root login policy
+      ansible.builtin.shell: grep -E '^PermitRootLogin' /etc/ssh/sshd_config || echo "PermitRootLogin not set"
+      register: ssh_root_login
+      changed_when: false
+
+    - name: Display SSH root login finding
+      ansible.builtin.debug:
+        msg: >
+          {{ '⚠️ Root SSH login is enabled — should be disabled in /etc/ssh/sshd_config'
+             if 'PermitRootLogin yes' in ssh_root_login.stdout
+             else '✅ Root SSH login is disabled (secure)' }}
+
+    ###########################################################################
+    # 5️⃣ Check for anonymous or insecure services (FTP/Telnet)
+    ###########################################################################
+    - name: Check if telnet or ftp servers are installed
+      ansible.builtin.shell: dpkg -l | grep -E 'vsftpd|telnetd' || true
+      register: insecure_services
+      changed_when: false
+
+    - name: Display insecure services finding
+      ansible.builtin.debug:
+        msg: >
+          {% if insecure_services.stdout %}
+            ⚠️ Insecure services found: {{ insecure_services.stdout_lines }}
+          {% else %}
+            ✅ No insecure (FTP/Telnet) services found
+          {% endif %}

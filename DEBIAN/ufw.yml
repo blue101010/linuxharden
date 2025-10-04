@@ -1,0 +1,83 @@
+---
+- name: Safe UFW installation and configuration for Debian
+  hosts: all
+  become: yes
+  gather_facts: yes
+
+  vars:
+    # You can modify or extend these lists as needed
+    allowed_ports:
+      - { rule: "OpenSSH", description: "SSH remote access" }
+      - { rule: "80/tcp", description: "HTTP web traffic" }
+      - { rule: "443/tcp", description: "HTTPS secure web traffic" }
+
+  tasks:
+
+    ###########################################################################
+    # 1️⃣ Ensure UFW package is installed
+    ###########################################################################
+    - name: Install UFW firewall package
+      ansible.builtin.apt:
+        name: ufw
+        state: present
+        update_cache: yes
+
+    ###########################################################################
+    # 2️⃣ Set UFW default policies
+    ###########################################################################
+    - name: Set default policy to deny incoming
+      ansible.builtin.command: ufw default deny incoming
+      register: deny_in
+      changed_when: "'reset' not in deny_in.stdout"
+
+    - name: Set default policy to allow outgoing
+      ansible.builtin.command: ufw default allow outgoing
+      register: allow_out
+      changed_when: "'reset' not in allow_out.stdout"
+
+    ###########################################################################
+    # 3️⃣ Allow required ports before enabling UFW
+    ###########################################################################
+    - name: Allow essential ports (SSH, HTTP, HTTPS)
+      ansible.builtin.command: ufw allow {{ item.rule }}
+      loop: "{{ allowed_ports }}"
+      register: ufw_rules
+      changed_when: "'added' in ufw_rules.stdout or 'updated' in ufw_rules.stdout"
+      ignore_errors: yes
+
+    ###########################################################################
+    # 4️⃣ Enable UFW safely
+    ###########################################################################
+    - name: Check if UFW is already active
+      ansible.builtin.command: ufw status
+      register: ufw_status
+      changed_when: false
+      failed_when: false
+
+    - name: Enable UFW if not already active
+      ansible.builtin.command: ufw --force enable
+      when: "'Status: active' not in ufw_status.stdout"
+      register: ufw_enable
+      changed_when: true
+      failed_when: false
+
+    ###########################################################################
+    # 5️⃣ Ensure UFW is enabled on boot
+    ###########################################################################
+    - name: Ensure UFW service is enabled at boot
+      ansible.builtin.systemd:
+        name: ufw
+        enabled: yes
+        state: started
+
+    ###########################################################################
+    # 6️⃣ Display final firewall status
+    ###########################################################################
+    - name: Display current UFW status and rules
+      ansible.builtin.command: ufw status verbose
+      register: ufw_result
+      changed_when: false
+
+    - name: Show UFW result summary
+      ansible.builtin.debug:
+        msg: "{{ ufw_result.stdout_lines }}"

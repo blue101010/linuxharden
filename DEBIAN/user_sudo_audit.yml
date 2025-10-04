@@ -1,0 +1,90 @@
+---
+- name: Debian User & Sudo Security Audit
+  hosts: all
+  become: yes
+  gather_facts: yes
+
+  tasks:
+
+    ###########################################################################
+    # 1️⃣ Check for UID 0 accounts (root equivalents)
+    ###########################################################################
+    - name: Check for multiple UID 0 users
+      ansible.builtin.shell: "awk -F':' '($3 == 0) {print $1}' /etc/passwd"
+      register: uid0_accounts
+      changed_when: false
+
+    - name: Report UID 0 user accounts
+      ansible.builtin.debug:
+        msg: >
+          {% if uid0_accounts.stdout_lines | length == 1 and 'root' in uid0_accounts.stdout %}
+            ✅ Only root has UID 0 — secure.
+          {% else %}
+            ⚠️ Multiple UID 0 accounts found: {{ uid0_accounts.stdout_lines }}
+          {% endif %}
+
+    ###########################################################################
+    # 2️⃣ Check for accounts with no password or locked shell
+    ###########################################################################
+    - name: List users without passwords
+      ansible.builtin.shell: "awk -F':' '($2 == \"\") {print $1}' /etc/shadow"
+      register: no_password_users
+      changed_when: false
+
+    - name: Report users without passwords
+      ansible.builtin.debug:
+        msg: >
+          {% if no_password_users.stdout_lines %}
+            ⚠️ Users without passwords: {{ no_password_users.stdout_lines }}
+          {% else %}
+            ✅ All users have password hashes defined.
+          {% endif %}
+
+    - name: Check for users with /bin/false or /usr/sbin/nologin (service accounts)
+      ansible.builtin.shell: "awk -F':' '($7 ~ /(false|nologin)$/) {print $1}' /etc/passwd"
+      register: service_accounts
+      changed_when: false
+
+    - name: Report service accounts
+      ansible.builtin.debug:
+        msg: >
+          ✅ Service accounts with no login shell: {{ service_accounts.stdout_lines | default([]) }}
+
+    ###########################################################################
+    # 3️⃣ Identify users with sudo privileges (fixed & reliable)
+    ###########################################################################
+    - name: Check sudo group membership
+      ansible.builtin.shell: "getent group sudo | awk -F':' '{print $4}' || true"
+      register: sudo_group_users
+      changed_when: false
+
+    - name: Check wheel group (if exists)
+      ansible.builtin.shell: "getent group wheel | awk -F':' '{print $4}' || true"
+      register: wheel_group_users
+      changed_when: false
+
+    - name: Combine sudo and wheel users
+      ansible.builtin.set_fact:
+        all_sudoers: >-
+          {{
+            (
+              ((sudo_group_users.stdout | default('')) + ',' + (wheel_group_users.stdout | default('')))
+              .split(',')
+              | map('trim')
+              | reject('equalto', '')
+              | list
+            )
+          }}
+
+    - name: Report users with sudo/wheel access
+      ansible.builtin.debug:
+        msg: >
+          {% if all_sudoers | length > 0 %}
+            ⚠️ Users with sudo privileges: {{ all_sudoers }}
+          {% else %}
+            ✅ No users with unrestricted sudo privileges.
+          {% endif %}
+
+    ###########################################################################
+    # 4️⃣ Check sudoers file for insecure rules
+    ####################################################

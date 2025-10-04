@@ -1,0 +1,89 @@
+---
+- name: Check PHP 8.4 migration and module activation for Bitnami environment
+  hosts: all
+  become: yes
+  gather_facts: no
+
+  vars:
+    php_version: "8.4"
+    php_ini_scan_dir: "/etc/php/8.4/fpm/conf.d"
+    bitnami_ctl: "/opt/bitnami/php/scripts/ctl.sh"
+    required_modules:
+      - mysqlnd
+      - mysqli
+      - pdo_mysql
+
+  tasks:
+
+    - name: Check that php8.4-mysql package is installed
+    - name: Ensure php8.4-mysql is installed
+      ansible.builtin.package_facts:
+      register: pkg_facts
+
+    - name: Assert php8.4-mysql package present
+      ansible.builtin.assert:
+        that:
+          - "'php8.4-mysql' in pkg_facts.packages"
+        fail_msg: "❌ php8.4-mysql is not installed."
+        success_msg: "✅ php8.4-mysql is installed."
+
+    - name: Check existence of mysqli.ini file in mods-available
+      ansible.builtin.stat:
+        path: "/etc/php/{{ php_version }}/mods-available/mysqli.ini"
+      register: mysqli_ini
+
+    - name: Assert mysqli.ini exists
+      ansible.builtin.assert:
+        that:
+          - mysqli_ini.stat.exists
+        fail_msg: "❌ /etc/php/{{ php_version }}/mods-available/mysqli.ini is missing."
+        success_msg: "✅ mysqli.ini file exists."
+
+    - name: Check that mysqli.ini has uncommented extension line
+      ansible.builtin.shell: "grep -E '^\\s*extension=mysqli\\.so' /etc/php/{{ php_version }}/mods-available/mysqli.ini || true"
+      register: mysqli_ini_check
+      changed_when: false
+
+    - name: Assert mysqli.ini enables the extension
+      ansible.builtin.assert:
+        that:
+          - mysqli_ini_check.stdout | length > 0
+        fail_msg: "❌ mysqli.ini is commented — expected 'extension=mysqli.so'."
+        success_msg: "✅ mysqli.ini enables mysqli extension."
+
+    - name: Check PHP_INI_SCAN_DIR injection in Bitnami ctl.sh
+      ansible.builtin.shell: "grep 'PHP_INI_SCAN_DIR' {{ bitnami_ctl }} || true"
+      register: ctl_sh_scan
+      changed_when: false
+
+    - name: Assert PHP_INI_SCAN_DIR is present in ctl.sh
+      ansible.builtin.assert:
+        that:
+          - ctl_sh_scan.stdout | length > 0
+        fail_msg: "❌ PHP_INI_SCAN_DIR is not set in {{ bitnami_ctl }}."
+        success_msg: "✅ PHP_INI_SCAN_DIR is correctly set in ctl.sh."
+
+    - name: Run php -m in Bitnami context to list modules
+      ansible.builtin.shell: >
+        PHP_INI_SCAN_DIR="{{ php_ini_scan_dir }}" php -c /opt/bitnami/php/etc/php.ini -m
+      register: php_modules
+      changed_when: false
+
+    - name: Check required PHP modules are loaded
+      ansible.builtin.assert:
+        that: "{{ item }} in php_modules.stdout_lines"
+        fail_msg: "❌ PHP module {{ item }} is not loaded."
+        success_msg: "✅ PHP module {{ item }} is loaded."
+      loop: "{{ required_modules }}"
+
+    - name: Check Bitnami php-fpm master process is using php-fpm8.4
+      ansible.builtin.shell: "ps -eo args | grep '[p]hp-fpm' | grep -E '8\\.4'"
+      register: fpm_proc_check
+      changed_when: false
+
+    - name: Assert php-fpm8.4 is the running master binary
+      ansible.builtin.assert:
+        that:
+          - fpm_proc_check.stdout | length > 0
+        fail_msg: "❌ php-fpm master process is not php-fpm8.4."
+        success_msg: "✅ php-fpm8.4 is the running master process."

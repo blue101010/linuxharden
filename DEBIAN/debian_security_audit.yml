@@ -1,0 +1,82 @@
+---
+- name: Basic Debian Security Checks
+  hosts: all
+  become: yes
+  gather_facts: yes
+
+  tasks:
+
+    ###########################################################################
+    # 1️⃣ Check for Pending Security Updates
+    ###########################################################################
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: yes
+      register: apt_update
+
+    - name: List available security updates
+      ansible.builtin.shell: |
+        apt list --upgradable 2>/dev/null | grep -i security || true
+      register: security_updates
+      changed_when: false
+
+    - name: Show security updates (if any)
+      ansible.builtin.debug:
+        msg: "{{ security_updates.stdout_lines | default(['✅ No pending security updates found']) }}"
+
+    ###########################################################################
+    # 2️⃣ Check for Root Login Over SSH (should be disabled)
+    ###########################################################################
+    - name: Check SSH root login policy
+      ansible.builtin.shell: |
+        grep -E '^PermitRootLogin' /etc/ssh/sshd_config || echo "PermitRootLogin not set"
+      register: ssh_root_login
+      changed_when: false
+
+    - name: Display SSH root login result
+      ansible.builtin.debug:
+        msg: >
+          {{ '⚠️ Root SSH login is enabled — review /etc/ssh/sshd_config!' 
+             if 'PermitRootLogin yes' in ssh_root_login.stdout
+             else '✅ Root SSH login is disabled (good)' }}
+
+    ###########################################################################
+    # 3️⃣ Check if UFW (Uncomplicated Firewall) is installed and active
+    ###########################################################################
+    - name: Check if UFW is installed
+      ansible.builtin.shell: command -v ufw || true
+      register: ufw_path
+      changed_when: false
+
+    - name: Check UFW status (if installed)
+      ansible.builtin.shell: ufw status 2>/dev/null || echo "inactive"
+      when: ufw_path.stdout != ""
+      register: ufw_status
+      changed_when: false
+
+    - name: Display UFW firewall status
+      ansible.builtin.debug:
+        msg: >
+          {% if ufw_path.stdout == "" %}
+            ⚠️  UFW not installed — install with: sudo apt install ufw
+          {% elif 'active' in ufw_status.stdout %}
+            ✅ UFW is active and running
+          {% else %}
+            ⚠️  UFW is installed but inactive — enable with: sudo ufw enable
+          {% endif %}
+      when: ufw_path is defined
+
+    ###########################################################################
+    # 4️⃣ Check for Unattended Upgrades (auto security updates)
+    ###########################################################################
+    - name: Check if unattended-upgrades is installed
+      ansible.builtin.shell: dpkg -l | grep unattended-upgrades || true
+      register: unattended_pkg
+      changed_when: false
+
+    - name: Display unattended-upgrades status
+      ansible.builtin.debug:
+        msg: >
+          {{ '✅ unattended-upgrades is installed (automatic security updates enabled)'
+             if unattended_pkg.stdout != ''
+             else '⚠️ unattended-upgrades not installed — run: sudo apt install unattended-upgrades' }}
