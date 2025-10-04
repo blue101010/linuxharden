@@ -1,0 +1,52 @@
+---
+- name: Update rsyslog log rotation policy for high-volume environments
+  hosts: all
+  become: yes
+  vars:
+    logrotate_rsyslog_path: /etc/logrotate.d/rsyslog
+    logrotate_backup_path: /etc/logrotate.d/rsyslog.bak
+
+  tasks:
+    - name: Backup existing rsyslog logrotate configuration
+      ansible.builtin.copy:
+        src: "{{ logrotate_rsyslog_path }}"
+        dest: "{{ logrotate_backup_path }}"
+        remote_src: true
+        backup: yes
+      when: ansible.builtin.stat(path=logrotate_rsyslog_path).stat.exists | default(false)
+
+    - name: Deploy new rsyslog logrotate configuration
+      ansible.builtin.copy:
+        dest: "{{ logrotate_rsyslog_path }}"
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          /var/log/syslog
+          /var/log/mail.log
+          /var/log/kern.log
+          /var/log/auth.log
+          /var/log/user.log
+          /var/log/cron.log
+          {
+                  daily
+                  rotate 7
+                  size 200M
+                  missingok
+                  notifempty
+                  compress
+                  delaycompress
+                  sharedscripts
+                  postrotate
+                          /usr/lib/rsyslog/rsyslog-rotate
+                  endscript
+          }
+
+    - name: Force log rotation immediately (optional)
+      ansible.builtin.command: logrotate -f "{{ logrotate_rsyslog_path }}"
+      register: rotate_result
+      changed_when: rotate_result.rc == 0
+
+    - name: Display rotation result
+      ansible.builtin.debug:
+        var: rotate_result.stdout
