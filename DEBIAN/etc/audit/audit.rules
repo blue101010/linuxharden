@@ -1,0 +1,305 @@
+## Comprehensive Audit Rules for Debian Hardening
+## Deploy to: /etc/audit/rules.d/audit.rules
+## After deployment: service auditd restart or augenrules --load
+##
+## Architecture: This ruleset is designed for both 32-bit and 64-bit systems
+## Performance: Moderate impact - adjust based on your system requirements
+
+#############################################################################
+# 1. Delete all existing rules
+#############################################################################
+-D
+
+#############################################################################
+# 2. Set buffer size for audit events
+#############################################################################
+# Increase buffer to handle high volume of events (prevent event loss)
+-b 8192
+
+#############################################################################
+# 3. Set failure mode
+#############################################################################
+# 0=silent 1=printk 2=panic
+# Use 1 for production (log but continue), 2 for high-security (panic on audit failure)
+-f 1
+
+#############################################################################
+# 4. Time Changes Monitoring
+#############################################################################
+# Monitor system date/time modifications
+-a always,exit -F arch=b64 -S adjtimex -S settimeofday -k time-change
+-a always,exit -F arch=b32 -S adjtimex -S settimeofday -S stime -k time-change
+-a always,exit -F arch=b64 -S clock_settime -k time-change
+-a always,exit -F arch=b32 -S clock_settime -k time-change
+-w /etc/localtime -p wa -k time-change
+
+#############################################################################
+# 5. User/Group Information Monitoring
+#############################################################################
+# Monitor changes to user and group databases
+-w /etc/group -p wa -k identity
+-w /etc/passwd -p wa -k identity
+-w /etc/gshadow -p wa -k identity
+-w /etc/shadow -p wa -k identity
+-w /etc/security/opasswd -p wa -k identity
+
+#############################################################################
+# 6. Network Environment Monitoring
+#############################################################################
+# Monitor network configuration changes
+-a always,exit -F arch=b64 -S sethostname -S setdomainname -k system-locale
+-a always,exit -F arch=b32 -S sethostname -S setdomainname -k system-locale
+-w /etc/issue -p wa -k system-locale
+-w /etc/issue.net -p wa -k system-locale
+-w /etc/hosts -p wa -k system-locale
+-w /etc/network -p wa -k system-locale
+-w /etc/networks -p wa -k system-locale
+-w /etc/hostname -p wa -k system-locale
+-w /etc/hosts.allow -p wa -k system-locale
+-w /etc/hosts.deny -p wa -k system-locale
+
+#############################################################################
+# 7. Mandatory Access Control (AppArmor/SELinux)
+#############################################################################
+# Monitor AppArmor configuration changes (Debian default)
+-w /etc/apparmor/ -p wa -k MAC-policy
+-w /etc/apparmor.d/ -p wa -k MAC-policy
+
+# Monitor SELinux configuration (if used)
+-w /etc/selinux/ -p wa -k MAC-policy
+-w /usr/share/selinux/ -p wa -k MAC-policy
+
+#############################################################################
+# 8. Login/Logout Events
+#############################################################################
+# Monitor login records
+-w /var/log/faillog -p wa -k logins
+-w /var/log/lastlog -p wa -k logins
+-w /var/log/tallylog -p wa -k logins
+
+#############################################################################
+# 9. Session Monitoring
+#############################################################################
+# Monitor user session information
+-w /var/run/utmp -p wa -k session
+-w /var/log/wtmp -p wa -k logins
+-w /var/log/btmp -p wa -k logins
+
+#############################################################################
+# 10. Discretionary Access Control (DAC) Permission Modifications
+#############################################################################
+# Monitor file permission changes
+-a always,exit -F arch=b64 -S chmod -S fchmod -S fchmodat -F auid>=1000 -F auid!=4294967295 -k perm_mod
+-a always,exit -F arch=b32 -S chmod -S fchmod -S fchmodat -F auid>=1000 -F auid!=4294967295 -k perm_mod
+-a always,exit -F arch=b64 -S chown -S fchown -S lchown -F auid>=1000 -F auid!=4294967295 -k perm_mod
+-a always,exit -F arch=b32 -S chown -S fchown -S lchown -F auid>=1000 -F auid!=4294967295 -k perm_mod
+-a always,exit -F arch=b64 -S setxattr -S lsetxattr -S fsetxattr -S removexattr -S lremovexattr -S fremovexattr -F auid>=1000 -F auid!=4294967295 -k perm_mod
+-a always,exit -F arch=b32 -S setxattr -S lsetxattr -S fsetxattr -S removexattr -S lremovexattr -S fremovexattr -F auid>=1000 -F auid!=4294967295 -k perm_mod
+
+#############################################################################
+# 11. Unauthorized Access Attempts
+#############################################################################
+# Monitor failed file access attempts
+-a always,exit -F arch=b64 -S open -S openat -F exit=-EACCES -F auid>=1000 -F auid!=4294967295 -k access
+-a always,exit -F arch=b32 -S open -S openat -F exit=-EACCES -F auid>=1000 -F auid!=4294967295 -k access
+-a always,exit -F arch=b64 -S open -S openat -F exit=-EPERM -F auid>=1000 -F auid!=4294967295 -k access
+-a always,exit -F arch=b32 -S open -S openat -F exit=-EPERM -F auid>=1000 -F auid!=4294967295 -k access
+
+# Monitor failed attempts on critical files
+-a always,exit -F arch=b64 -S open -S openat -S openat2 -F dir=/etc -F exit=-EACCES -F auid>=1000 -F auid!=4294967295 -k access
+-a always,exit -F arch=b64 -S open -S openat -S openat2 -F dir=/etc -F exit=-EPERM -F auid>=1000 -F auid!=4294967295 -k access
+
+#############################################################################
+# 12. Privileged Command Execution
+#############################################################################
+# Monitor execution of setuid/setgid programs
+# Note: Run the following command to generate rules for your system:
+# find /bin /usr/bin /sbin /usr/sbin /usr/local/bin /usr/local/sbin -type f -perm /6000 2>/dev/null | \
+# awk '{print "-a always,exit -F path=" $1 " -F perm=x -F auid>=1000 -F auid!=4294967295 -k privileged"}'
+
+# Common privileged commands
+-a always,exit -F path=/usr/bin/sudo -F perm=x -F auid>=1000 -F auid!=4294967295 -k privileged
+-a always,exit -F path=/usr/bin/su -F perm=x -F auid>=1000 -F auid!=4294967295 -k privileged
+-a always,exit -F path=/usr/bin/passwd -F perm=x -F auid>=1000 -F auid!=4294967295 -k privileged
+-a always,exit -F path=/usr/bin/chsh -F perm=x -F auid>=1000 -F auid!=4294967295 -k privileged
+-a always,exit -F path=/usr/bin/chfn -F perm=x -F auid>=1000 -F auid!=4294967295 -k privileged
+-a always,exit -F path=/usr/bin/newgrp -F perm=x -F auid>=1000 -F auid!=4294967295 -k privileged
+-a always,exit -F path=/usr/bin/gpasswd -F perm=x -F auid>=1000 -F auid!=4294967295 -k privileged
+-a always,exit -F path=/usr/bin/chage -F perm=x -F auid>=1000 -F auid!=4294967295 -k privileged
+-a always,exit -F path=/usr/bin/mount -F perm=x -F auid>=1000 -F auid!=4294967295 -k privileged
+-a always,exit -F path=/usr/bin/umount -F perm=x -F auid>=1000 -F auid!=4294967295 -k privileged
+-a always,exit -F path=/usr/bin/ssh-agent -F perm=x -F auid>=1000 -F auid!=4294967295 -k privileged
+-a always,exit -F path=/usr/bin/wall -F perm=x -F auid>=1000 -F auid!=4294967295 -k privileged
+-a always,exit -F path=/usr/bin/pkexec -F perm=x -F auid>=1000 -F auid!=4294967295 -k privileged
+
+# Monitor crontab
+-a always,exit -F path=/usr/bin/crontab -F perm=x -F auid>=1000 -F auid!=4294967295 -k privileged
+
+#############################################################################
+# 13. Sudo and Privilege Escalation Monitoring
+#############################################################################
+# Monitor sudo configuration and logs
+-w /etc/sudoers -p wa -k sudo_config
+-w /etc/sudoers.d/ -p wa -k sudo_config
+-w /var/log/sudo.log -p wa -k sudo_log
+
+# Monitor privilege escalation
+-a always,exit -F arch=b64 -S setuid -S setreuid -S setresuid -F auid>=1000 -F auid!=4294967295 -k priv_esc
+-a always,exit -F arch=b32 -S setuid -S setreuid -S setresuid -F auid>=1000 -F auid!=4294967295 -k priv_esc
+
+#############################################################################
+# 14. Kernel Module Loading/Unloading
+#############################################################################
+# Monitor kernel module operations
+-w /sbin/insmod -p x -k modules
+-w /sbin/rmmod -p x -k modules
+-w /sbin/modprobe -p x -k modules
+-a always,exit -F arch=b64 -S init_module -S delete_module -S finit_module -k modules
+-a always,exit -F arch=b32 -S init_module -S delete_module -S finit_module -k modules
+-w /etc/modprobe.conf -p wa -k modules
+-w /etc/modprobe.d/ -p wa -k modules
+
+#############################################################################
+# 15. File Deletion Events
+#############################################################################
+# Monitor file deletion by users
+-a always,exit -F arch=b64 -S unlink -S unlinkat -S rename -S renameat -S rmdir -F auid>=1000 -F auid!=4294967295 -k delete
+-a always,exit -F arch=b32 -S unlink -S unlinkat -S rename -S renameat -S rmdir -F auid>=1000 -F auid!=4294967295 -k delete
+
+#############################################################################
+# 16. System Call Auditing
+#############################################################################
+# Monitor program execution (execve)
+-a always,exit -F arch=b64 -S execve -F auid>=1000 -F auid!=4294967295 -k exec
+-a always,exit -F arch=b32 -S execve -F auid>=1000 -F auid!=4294967295 -k exec
+
+#############################################################################
+# 17. Systemd and Service Management
+#############################################################################
+# Monitor systemd configuration changes
+-w /etc/systemd/ -p wa -k systemd
+-w /lib/systemd/ -p wa -k systemd
+
+#############################################################################
+# 18. Critical System Files
+#############################################################################
+# Monitor changes to critical configuration files
+-w /etc/sysctl.conf -p wa -k sysctl
+-w /etc/sysctl.d/ -p wa -k sysctl
+-w /etc/ssh/sshd_config -p wa -k sshd_config
+-w /etc/ssh/ssh_config -p wa -k ssh_config
+
+#############################################################################
+# 19. Firewall and Network Security
+#############################################################################
+# Monitor firewall changes (iptables/nftables/ufw)
+-w /etc/iptables/ -p wa -k firewall
+-w /etc/nftables.conf -p wa -k firewall
+-w /etc/ufw/ -p wa -k firewall
+-w /sbin/iptables -p x -k firewall
+-w /sbin/ip6tables -p x -k firewall
+-w /sbin/nft -p x -k firewall
+-w /usr/sbin/ufw -p x -k firewall
+
+#############################################################################
+# 20. PAM Configuration
+#############################################################################
+# Monitor Pluggable Authentication Modules
+-w /etc/pam.d/ -p wa -k pam
+-w /etc/security/ -p wa -k pam
+
+#############################################################################
+# 21. Boot Configuration
+#############################################################################
+# Monitor boot loader and kernel configuration
+-w /etc/default/grub -p wa -k grub_config
+-w /boot/grub/grub.cfg -p wa -k grub_config
+-w /boot/grub2/grub.cfg -p wa -k grub_config
+
+#############################################################################
+# 22. Package Management
+#############################################################################
+# Monitor package installation/removal (Debian/Ubuntu)
+-w /usr/bin/dpkg -p x -k software_mgmt
+-w /usr/bin/apt -p x -k software_mgmt
+-w /usr/bin/apt-get -p x -k software_mgmt
+-w /usr/bin/aptitude -p x -k software_mgmt
+
+#############################################################################
+# 23. Log Files
+#############################################################################
+# Monitor system log files
+-w /var/log/auth.log -p wa -k auth_log
+-w /var/log/syslog -p wa -k syslog
+
+#############################################################################
+# 24. Cron Jobs
+#############################################################################
+# Monitor scheduled tasks
+-w /etc/cron.allow -p wa -k cron
+-w /etc/cron.deny -p wa -k cron
+-w /etc/cron.d/ -p wa -k cron
+-w /etc/cron.daily/ -p wa -k cron
+-w /etc/cron.hourly/ -p wa -k cron
+-w /etc/cron.monthly/ -p wa -k cron
+-w /etc/cron.weekly/ -p wa -k cron
+-w /etc/crontab -p wa -k cron
+-w /var/spool/cron/crontabs/ -p wa -k cron
+
+#############################################################################
+# 25. Special Files and Directories
+#############################################################################
+# Monitor /tmp and /var/tmp for suspicious activity
+-w /tmp -p wa -k tmp_files
+-w /var/tmp -p wa -k tmp_files
+
+# Monitor /root directory
+-w /root -p wa -k root_dir
+
+#############################################################################
+# 26. Database Monitoring (Optional - uncomment if needed)
+#############################################################################
+# MySQL/MariaDB
+# -w /etc/mysql/ -p wa -k database
+# -w /var/log/mysql/ -p wa -k database
+
+# PostgreSQL
+# -w /etc/postgresql/ -p wa -k database
+# -w /var/log/postgresql/ -p wa -k database
+
+#############################################################################
+# 27. Web Server Monitoring (Optional - uncomment if needed)
+#############################################################################
+# Apache
+# -w /etc/apache2/ -p wa -k webserver
+# -w /var/log/apache2/ -p wa -k webserver
+
+# Nginx
+# -w /etc/nginx/ -p wa -k webserver
+# -w /var/log/nginx/ -p wa -k webserver
+
+#############################################################################
+# 28. Docker/Container Monitoring (Optional - uncomment if needed)
+#############################################################################
+# -w /usr/bin/docker -p x -k docker
+# -w /var/lib/docker/ -p wa -k docker
+# -w /etc/docker/ -p wa -k docker
+
+#############################################################################
+# 29. Auditd Configuration Protection
+#############################################################################
+# Monitor audit system itself
+-w /etc/audit/ -p wa -k auditconfig
+-w /etc/libaudit.conf -p wa -k auditconfig
+-w /etc/audisp/ -p wa -k audispconfig
+-w /sbin/auditctl -p x -k audittools
+-w /sbin/auditd -p x -k audittools
+-w /var/log/audit/ -p wa -k auditlog
+
+#############################################################################
+# 30. Make Configuration Immutable
+#############################################################################
+# Lock the audit configuration to prevent changes
+# NOTE: After this rule is loaded, you cannot modify audit rules without rebooting
+# Comment out during testing, uncomment for production
+# -e 2
